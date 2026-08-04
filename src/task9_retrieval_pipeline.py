@@ -27,7 +27,7 @@ Logic:
 
 from .task5_semantic_search import semantic_search
 from .task6_lexical_search import lexical_search
-from .task7_reranking import rerank, rerank_rrf
+from .task7_reranking import rerank_rrf
 from .task8_pageindex_vectorless import pageindex_search
 
 
@@ -40,7 +40,6 @@ from .task8_pageindex_vectorless import pageindex_search
 # giá trị mẫu, mỗi corpus/embedding model sẽ cho khoảng điểm khác nhau.
 SCORE_THRESHOLD = 0.3   # Nếu best score (cosine gốc) < threshold → fallback PageIndex
 DEFAULT_TOP_K = 5
-RERANK_METHOD = "rrf"  # "cross_encoder" | "mmr" | "rrf"
 
 
 def retrieve(
@@ -77,33 +76,52 @@ def retrieve(
             'source': str  # 'hybrid' hoặc 'pageindex'
         }
     """
-    # TODO: Implement full retrieval pipeline
-    #
-    # Step 1: Song song chạy semantic + lexical
-    # dense_results = semantic_search(query, top_k=top_k * 2)
-    # sparse_results = lexical_search(query, top_k=top_k * 2)
-    #
-    # Step 2: Merge bằng RRF
-    # merged = rerank_rrf([dense_results, sparse_results], top_k=top_k * 2)
-    # for item in merged:
-    #     item["source"] = "hybrid"
-    #
-    # Step 3: Rerank
-    # if use_reranking and merged:
-    #     final_results = rerank(query, merged, top_k=top_k, method=RERANK_METHOD)
-    # else:
-    #     final_results = merged[:top_k]
-    #
-    # Step 4: Check threshold DÙNG ĐIỂM COSINE GỐC (dense_results), KHÔNG PHẢI RRF
-    # best_score = dense_results[0]["score"] if dense_results else 0.0
-    # if best_score < score_threshold:
-    #     print(f"  ⚠ Semantic best score ({best_score:.3f}) < threshold ({score_threshold})")
-    #     fallback = pageindex_search(query, top_k=top_k)
-    #     if fallback:
-    #         return fallback
-    #
-    # return final_results[:top_k]
-    raise NotImplementedError("Implement retrieve")
+    if top_k <= 0:
+        return []
+
+    # Fetch a wider candidate pool so RRF has enough documents from both
+    # retrievers. Dense and sparse scores deliberately remain independent:
+    # cosine similarity and BM25 scores are not directly comparable.
+    candidate_k = top_k * 3
+    dense_results = semantic_search(query, top_k=candidate_k) or []
+    sparse_results = lexical_search(query, top_k=candidate_k) or []
+
+    # Fallback confidence MUST use the original dense cosine score. RRF is a
+    # rank-fusion score, not a measure of semantic confidence.
+    best_dense_score = (
+        float(dense_results[0].get("score", 0.0)) if dense_results else 0.0
+    )
+    if best_dense_score < score_threshold:
+        fallback_results = pageindex_search(query, top_k=top_k) or []
+        if fallback_results:
+            return _normalize_results(fallback_results, "pageindex", top_k)
+
+    if use_reranking:
+        # RRF consumes the two original ranked lists. Calling
+        # rerank(..., method="rrf") would be incorrect because rerank receives
+        # one flat candidate list in the agreed Task 7 contract.
+        final_results = rerank_rrf(
+            [dense_results, sparse_results],
+            top_k=top_k,
+        )
+    else:
+        # Dense-only mode supports the evaluation pipeline's A/B comparison.
+        final_results = dense_results[:top_k]
+
+    return _normalize_results(final_results, "hybrid", top_k)
+
+
+def _normalize_results(
+    results: list[dict], source: str, top_k: int
+) -> list[dict]:
+    """Return the stable Task 9 schema without mutating upstream results."""
+    normalized = []
+    for result in results[:top_k]:
+        item = result.copy()
+        item["metadata"] = item.get("metadata") or {}
+        item["source"] = source
+        normalized.append(item)
+    return normalized
 
 
 if __name__ == "__main__":
