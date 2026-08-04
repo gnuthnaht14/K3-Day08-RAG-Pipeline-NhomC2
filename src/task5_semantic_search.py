@@ -4,9 +4,10 @@ Task 5 — Semantic Search Module.
 Viết module tìm kiếm ngữ nghĩa (dense retrieval) trên vector store.
 
 Yêu cầu:
-    - Input: query string + top_k
+    - Input: query string + top_k + use_hyde (mặc định False)
     - Output: danh sách chunks có score, sorted descending
     - Sử dụng OpenAI embedding model: text-embedding-3-small
+    - Hỗ trợ HyDE (Hypothetical Document Embeddings) bằng gpt-4o-mini khi use_hyde=True
 """
 
 import os
@@ -65,23 +66,53 @@ def get_collection() -> chromadb.Collection:
     return _collection
 
 
-def get_query_embedding(query: str) -> list[float]:
-    """Tạo vector embedding cho câu truy vấn bằng model text-embedding-3-small."""
+def generate_hypothetical_document(query: str, model_name: str = "gpt-4o-mini") -> str:
+    """
+    Sinh một câu trả lời giả định (hypothetical document) cho câu truy vấn bằng LLM (gpt-4o-mini).
+    """
+    client = get_openai_client()
+    target_model = model_name
+    if os.getenv("OPENROUTER_API_KEY") and not os.getenv("OPENAI_API_KEY") and not target_model.startswith("openai/"):
+        target_model = f"openai/{target_model}"
+
+    prompt = f"Please write a passage that directly answers the following question:\nQuestion: {query}\nPassage:"
+
+    response = client.chat.completions.create(
+        model=target_model,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a helpful assistant that generates hypothetical answer passages to improve semantic search retrieval.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.7,
+        max_tokens=256,
+    )
+    return response.choices[0].message.content.strip()
+
+
+def get_query_embedding(text: str) -> list[float]:
+    """Tạo vector embedding cho đoạn văn bản bằng model text-embedding-3-small."""
     client = get_openai_client()
     target_model = EMBEDDING_MODEL
     if os.getenv("OPENROUTER_API_KEY") and not os.getenv("OPENAI_API_KEY") and not target_model.startswith("openai/"):
         target_model = f"openai/{target_model}"
-    res = client.embeddings.create(input=query, model=target_model)
+    res = client.embeddings.create(input=text, model=target_model)
     return res.data[0].embedding
 
 
-def semantic_search(query: str, top_k: int = 10) -> list[dict]:
+def semantic_search(
+    query: str, top_k: int = 10, use_hyde: bool = False
+) -> list[dict]:
     """
-    Tìm kiếm ngữ nghĩa sử dụng vector similarity.
+    Tìm kiếm ngữ nghĩa sử dụng vector similarity với model text-embedding-3-small.
+    Hỗ trợ HyDE (Hypothetical Document Embeddings) nếu use_hyde=True.
 
     Args:
         query: Câu truy vấn
         top_k: Số lượng kết quả tối đa
+        use_hyde: Nếu True, sinh câu trả lời giả định bằng gpt-4o-mini trước khi embed
 
     Returns:
         List of {
@@ -99,7 +130,12 @@ def semantic_search(query: str, top_k: int = 10) -> list[dict]:
     if count == 0:
         return []
 
-    query_vector = get_query_embedding(query)
+    if use_hyde:
+        search_text = generate_hypothetical_document(query, model_name="gpt-4o-mini")
+    else:
+        search_text = query
+
+    query_vector = get_query_embedding(search_text)
 
     n_results = min(top_k, count)
     results = collection.query(
