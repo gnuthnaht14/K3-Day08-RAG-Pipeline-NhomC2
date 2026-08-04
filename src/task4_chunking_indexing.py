@@ -133,9 +133,10 @@ def chunk_documents(documents: list[dict]) -> list[dict]:
     """Split documents with LangChain's SemanticChunker."""
     try:
         from langchain_experimental.text_splitter import SemanticChunker
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
     except ImportError as exc:
         raise ImportError(
-            "Install langchain-experimental to use SemanticChunker."
+            "Install langchain-experimental and langchain-text-splitters."
         ) from exc
 
     splitter = SemanticChunker(
@@ -143,11 +144,25 @@ def chunk_documents(documents: list[dict]) -> list[dict]:
         breakpoint_threshold_type="percentile",
         breakpoint_threshold_amount=75,
     )
+    size_limiter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+    )
     chunks = []
     for document in documents:
-        for chunk_index, text in enumerate(splitter.split_text(document["content"])):
-            text = text.strip()
-            if text:
+        chunk_index = 0
+        for semantic_text in splitter.split_text(document["content"]):
+            # Semantic boundaries are preferred, but a hard size limit keeps
+            # prompt size predictable and satisfies the shared chunk contract.
+            limited_texts = (
+                [semantic_text]
+                if len(semantic_text) <= CHUNK_SIZE
+                else size_limiter.split_text(semantic_text)
+            )
+            for text in limited_texts:
+                text = text.strip()
+                if not text:
+                    continue
                 chunks.append(
                     {
                         "content": text,
@@ -157,6 +172,7 @@ def chunk_documents(documents: list[dict]) -> list[dict]:
                         },
                     }
                 )
+                chunk_index += 1
     return chunks
 
 

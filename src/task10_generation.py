@@ -135,6 +135,7 @@ def generate_with_citation(
     *,
     chunks: list[dict] | None = None,
     answer_generator: Callable[[str, str], str] | None = None,
+    use_pageindex: bool = True,
 ) -> dict:
     """
     End-to-end RAG generation có citation.
@@ -153,6 +154,7 @@ def generate_with_citation(
         chunks: Mock/pre-retrieved chunks. Nếu None, gọi retrieve() của Task 9
         answer_generator: Hàm mock nhận (system_prompt, user_message) và trả answer.
             Nếu None, gọi LLM thật qua OpenAI/OpenRouter.
+        use_pageindex: Có cho phép Task 9 gọi PageIndex fallback hay không
 
     Returns:
         {
@@ -165,7 +167,11 @@ def generate_with_citation(
     if not query or top_k <= 0:
         return _generation_result(INSUFFICIENT_EVIDENCE_MESSAGE, [])
 
-    retrieved_chunks = list(chunks) if chunks is not None else retrieve(query, top_k=top_k)
+    retrieved_chunks = (
+        list(chunks)
+        if chunks is not None
+        else retrieve(query, top_k=top_k, use_pageindex=use_pageindex)
+    )
     retrieved_chunks = retrieved_chunks[:top_k]
 
     # Empty chunks, or chunks with no usable text, are insufficient evidence.

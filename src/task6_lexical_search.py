@@ -20,9 +20,9 @@ from pathlib import Path
 import chromadb
 from rank_bm25 import BM25Okapi
 
+from .task4_chunking_indexing import CHROMA_DIR, COLLECTION_NAME
+
 STANDARDIZED_DIR = Path(__file__).parent.parent / "data" / "standardized"
-CHROMA_DIR = Path(__file__).parent.parent / "chroma_db"
-COLLECTION_NAME = "university_services_docs"
 
 # Corpus toàn cục: List of {'content': str, 'metadata': dict}
 CORPUS: list[dict] = []

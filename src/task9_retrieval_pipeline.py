@@ -47,6 +47,7 @@ def retrieve(
     top_k: int = DEFAULT_TOP_K,
     score_threshold: float = SCORE_THRESHOLD,
     use_reranking: bool = True,
+    use_pageindex: bool = True,
 ) -> list[dict]:
     """
     Retrieval pipeline hoàn chỉnh với fallback logic.
@@ -67,6 +68,7 @@ def retrieve(
         top_k: Số lượng kết quả cuối cùng
         score_threshold: Ngưỡng điểm cosine gốc tối thiểu (KHÔNG phải điểm RRF)
         use_reranking: Có áp dụng reranking hay không
+        use_pageindex: Có cho phép gọi PageIndex fallback hay không
 
     Returns:
         List of {
@@ -83,7 +85,11 @@ def retrieve(
     # retrievers. Dense and sparse scores deliberately remain independent:
     # cosine similarity and BM25 scores are not directly comparable.
     candidate_k = top_k * 3
-    dense_results = semantic_search(query, top_k=candidate_k) or []
+    try:
+        dense_results = semantic_search(query, top_k=candidate_k) or []
+    except (FileNotFoundError, ValueError, RuntimeError):
+        # Before Task 4 has created Chroma, BM25 can still serve the query.
+        dense_results = []
     sparse_results = lexical_search(query, top_k=candidate_k) or []
 
     # Fallback confidence MUST use the original dense cosine score. RRF is a
@@ -91,8 +97,13 @@ def retrieve(
     best_dense_score = (
         float(dense_results[0].get("score", 0.0)) if dense_results else 0.0
     )
-    if best_dense_score < score_threshold:
-        fallback_results = pageindex_search(query, top_k=top_k) or []
+    if use_pageindex and best_dense_score < score_threshold:
+        try:
+            fallback_results = pageindex_search(query, top_k=top_k) or []
+        except (ImportError, FileNotFoundError, RuntimeError):
+            # PageIndex is optional in the UI demo. If it has not been
+            # configured/uploaded yet, keep the available hybrid results.
+            fallback_results = []
         if fallback_results:
             return _normalize_results(fallback_results, "pageindex", top_k)
 
