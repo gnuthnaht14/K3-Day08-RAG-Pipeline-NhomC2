@@ -40,7 +40,7 @@ CHROMA_DIR = Path(__file__).parent.parent / "chroma_db"
 
 CHUNK_SIZE = 400
 CHUNK_OVERLAP = 50
-CHUNKING_METHOD = "semantic"
+CHUNKING_METHOD = "recursive"
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
 VECTOR_STORE = "chromadb"
@@ -130,20 +130,28 @@ def get_embedding_model():
 
 
 def chunk_documents(documents: list[dict]) -> list[dict]:
-    """Split documents with LangChain's SemanticChunker."""
-    try:
-        from langchain_experimental.text_splitter import SemanticChunker
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
-    except ImportError as exc:
-        raise ImportError(
-            "Install langchain-experimental and langchain-text-splitters."
-        ) from exc
+    """Split documents with RecursiveCharacterTextSplitter or SemanticChunker if available."""
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-    splitter = SemanticChunker(
-        get_embedding_model(),
-        breakpoint_threshold_type="percentile",
-        breakpoint_threshold_amount=75,
-    )
+    splitter = None
+    if CHUNKING_METHOD == "semantic":
+        try:
+            from langchain_experimental.text_splitter import SemanticChunker
+            splitter = SemanticChunker(
+                get_embedding_model(),
+                breakpoint_threshold_type="percentile",
+                breakpoint_threshold_amount=75,
+            )
+        except ImportError:
+            print("⚠️ langchain_experimental chưa được cài đặt, dùng RecursiveCharacterTextSplitter...")
+
+    if splitter is None:
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP,
+            separators=["\n\n", "\n", ". ", " ", ""],
+        )
+
     size_limiter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
