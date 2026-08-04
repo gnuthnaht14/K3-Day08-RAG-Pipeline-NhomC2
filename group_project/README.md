@@ -69,9 +69,36 @@ Xem code mẫu (DeepEval/RAGAS/TruLens) chi tiết trong `README.md` gốc mục
 
 ## Kiến Trúc Hệ Thống
 
+```mermaid
+flowchart LR
+    U[Người dùng] --> UI[Streamlit UI<br/>app.py]
+    UI --> T10[Task 10<br/>Generation + Citation]
+    T10 --> T9[Task 9<br/>Retrieval Pipeline]
+
+    T9 --> T5[Task 5<br/>Semantic Search]
+    T9 --> T6[Task 6<br/>BM25 Search]
+    T5 --> T7[Task 7<br/>RRF / Reranking]
+    T6 --> T7
+    T9 -. semantic score thấp .-> T8[Task 8<br/>PageIndex Fallback]
+
+    T5 --> V[(ChromaDB<br/>Vector Index)]
+    T6 --> D[(Markdown Corpus<br/>+ BM25 Index)]
+    T8 --> P[(PageIndex)]
+    T7 --> T10
+    T10 --> LLM[OpenAI / OpenRouter LLM]
+    LLM --> A[Câu trả lời<br/>+ nguồn trích dẫn]
+    T10 --> A
 ```
-[Vẽ diagram kiến trúc ở đây]
-```
+
+### Mô tả luồng
+
+1. Task 4 đọc dữ liệu Markdown, chunk tài liệu, tạo embedding và lưu vào ChromaDB.
+2. Task 5 thực hiện semantic search trên vector index của Task 4.
+3. Task 6 xây dựng BM25 index từ cùng collection/corpus với Task 4.
+4. Task 7 kết hợp các danh sách kết quả bằng RRF/reranking.
+5. Task 9 điều phối hybrid retrieval và gọi Task 8 làm fallback khi semantic score thấp.
+6. Task 10 sắp xếp context, gọi LLM, tạo câu trả lời tiếng Việt và kiểm tra citation.
+7. Streamlit hiển thị câu trả lời, nguồn tài liệu, lịch sử hội thoại và hỗ trợ follow-up.
 
 ---
 
@@ -79,10 +106,11 @@ Xem code mẫu (DeepEval/RAGAS/TruLens) chi tiết trong `README.md` gốc mục
 
 | Thành viên | MSSV | Nhiệm vụ | Trạng thái |
 |-----------|------|----------|------------|
-| | | | |
-| | | | |
-| | | | |
-| | | | |
+| Nhữ Trọng Thành | 2A202601977 | Task 9, 10 | Hoàn thành |
+| Mai Hồng Sơn | 2A202601921 | Task 5, 6 | Hoàn thành |
+| Lê Thị Linh | 2A202601441 | Task 3, 4 | Hoàn thành |
+| Vũ Thu Huyền | 2A202601583 | Task 1, 2 | Hoàn thành |
+| Lường Thị Hảo | 2A202601637 | Task 7, 8 | Hoàn thành |
 
 ---
 
