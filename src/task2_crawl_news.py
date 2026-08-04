@@ -29,11 +29,12 @@ def setup_directory():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
-# TODO: Điền danh sách URL bài viết cần crawl
 ARTICLE_URLS = [
-    # Ví dụ (trang công khai RMIT Vietnam):
-    # "https://www.rmit.edu.vn/libraryvn/...",
-    # "https://www.rmit.edu.vn/students/...",
+    "https://uet.vnu.edu.vn/mo-cong-dang-ky-ho-so-xet-tuyen-dai-hoc-chinh-quy-nam-2026/",
+    "https://uet.vnu.edu.vn/cac-nganh-tuyen-sinh-dai-hoc-2026-tai-truong-dai-hoc-cong-nghe-thuoc-danh-muc-cac-nganh-dao-tao-duoc-ap-dung-chinh-sach-hoc-bong-theo-nghi-dinh-so-179-2026-nd-cp/",
+    "https://uet.vnu.edu.vn/nam-2026-truong-dh-cong-nghe-dhqg-ha-noi-tuyen-sinh-dai-hoc-co-gi-moi-ho-tro-sinh-vien-ra-sao/",
+    "https://uet.vnu.edu.vn/canh-giac-voi-cac-thong-bao-giay-bao-gia-mao-gui-toi-thi-sinh-phu-huynh-trong-ky-tuyen-sinh-dai-hoc-nam-2025/",
+    "https://uet.vnu.edu.vn/le-trao-hoc-bong-truong-dai-hoc-cong-nghe-nam-hoc-2024-2025/",
 ]
 
 
@@ -49,18 +50,40 @@ async def crawl_article(url: str) -> dict:
             "content_markdown": str
         }
     """
-    from crawl4ai import AsyncWebCrawler
+    try:
+        from crawl4ai import AsyncWebCrawler
 
-    # TODO: Implement crawling logic
-    # async with AsyncWebCrawler() as crawler:
-    #     result = await crawler.arun(url=url)
-    #     return {
-    #         "url": url,
-    #         "title": result.metadata.get("title", "Unknown"),
-    #         "date_crawled": datetime.now().isoformat(),
-    #         "content_markdown": result.markdown,
-    #     }
-    raise NotImplementedError("Implement crawl_article")
+        async with AsyncWebCrawler() as crawler:
+            result = await crawler.arun(url=url)
+            title = "Unknown"
+            if hasattr(result, "metadata") and isinstance(result.metadata, dict):
+                title = result.metadata.get("title") or result.metadata.get("og:title") or "Unknown"
+            elif hasattr(result, "title") and result.title:
+                title = result.title
+
+            markdown_content = getattr(result, "markdown", "") or ""
+            return {
+                "url": url,
+                "title": title,
+                "date_crawled": datetime.now().isoformat(),
+                "content_markdown": markdown_content,
+            }
+    except Exception as e:
+        print(f"  ⚠️ Crawl4AI error ({e}), dùng fallback requests...")
+        import requests
+        from bs4 import BeautifulSoup
+
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        title = soup.title.string.strip() if soup.title else "Unknown"
+        text = soup.get_text(separator="\n\n")
+        return {
+            "url": url,
+            "title": title,
+            "date_crawled": datetime.now().isoformat(),
+            "content_markdown": text,
+        }
+
 
 
 async def crawl_all():
