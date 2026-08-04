@@ -148,3 +148,64 @@ def test_zero_top_k_short_circuits():
     assert results == []
     pipeline.semantic_search.assert_not_called()
     pipeline.lexical_search.assert_not_called()
+
+
+def test_bm25_only_baseline_disables_dense_and_reranking():
+    pipeline.semantic_search.return_value = [
+        {"content": "Should not be used", "score": 0.99, "metadata": {}}
+    ]
+    pipeline.lexical_search.return_value = [
+        {"content": "Keyword match", "score": 4.2, "metadata": {}}
+    ]
+
+    results = pipeline.retrieve(
+        "keyword",
+        top_k=1,
+        use_dense=False,
+        use_bm25=True,
+        use_reranking=False,
+        use_pageindex=True,
+    )
+
+    pipeline.semantic_search.assert_not_called()
+    pipeline.lexical_search.assert_called_once_with("keyword", top_k=3)
+    pipeline.rerank_rrf.assert_not_called()
+    pipeline.pageindex_search.assert_not_called()
+    assert results[0]["source"] == "bm25"
+
+
+def test_dense_only_disables_bm25():
+    pipeline.semantic_search.return_value = [
+        {"content": "Semantic match", "score": 0.9, "metadata": {}}
+    ]
+    pipeline.lexical_search.return_value = [
+        {"content": "Should not be used", "score": 8.0, "metadata": {}}
+    ]
+
+    results = pipeline.retrieve(
+        "semantic",
+        top_k=1,
+        use_dense=True,
+        use_bm25=False,
+        use_reranking=True,
+        use_pageindex=False,
+    )
+
+    pipeline.semantic_search.assert_called_once_with("semantic", top_k=3)
+    pipeline.lexical_search.assert_not_called()
+    pipeline.rerank_rrf.assert_not_called()
+    assert results[0]["source"] == "dense"
+
+
+def test_disabling_both_searchers_returns_empty():
+    results = pipeline.retrieve(
+        "anything",
+        use_dense=False,
+        use_bm25=False,
+        use_pageindex=True,
+    )
+
+    assert results == []
+    pipeline.semantic_search.assert_not_called()
+    pipeline.lexical_search.assert_not_called()
+    pipeline.pageindex_search.assert_not_called()

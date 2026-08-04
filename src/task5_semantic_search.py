@@ -20,11 +20,19 @@ load_dotenv()
 
 # Re-use configuration from Task 4
 try:
-    from .task4_chunking_indexing import CHROMA_DIR, COLLECTION_NAME, EMBEDDING_MODEL
+    from .task4_chunking_indexing import (
+        CHROMA_DIR,
+        COLLECTION_NAME,
+        EMBEDDING_MODEL,
+        get_embedding_model,
+    )
 except ImportError:
     CHROMA_DIR = Path(__file__).parent.parent / "chroma_db"
     COLLECTION_NAME = "university_services_docs"
     EMBEDDING_MODEL = "text-embedding-3-small"
+
+    def get_embedding_model():
+        raise ImportError("Task 4 embedding backend is unavailable.")
 
 _openai_client = None
 _collection = None
@@ -93,13 +101,8 @@ def generate_hypothetical_document(query: str, model_name: str = "gpt-4o-mini") 
 
 
 def get_query_embedding(text: str) -> list[float]:
-    """Tạo vector embedding cho đoạn văn bản bằng model text-embedding-3-small."""
-    client = get_openai_client()
-    target_model = EMBEDDING_MODEL
-    if os.getenv("OPENROUTER_API_KEY") and not os.getenv("OPENAI_API_KEY") and not target_model.startswith("openai/"):
-        target_model = f"openai/{target_model}"
-    res = client.embeddings.create(input=text, model=target_model)
-    return res.data[0].embedding
+    """Embed query with the exact same backend used by Task 4 indexing."""
+    return get_embedding_model().embed_query(text)
 
 
 def semantic_search(

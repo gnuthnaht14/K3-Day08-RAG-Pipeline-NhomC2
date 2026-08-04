@@ -16,6 +16,7 @@ BM25 hoạt động thế nào:
 """
 
 import re
+import unicodedata
 from pathlib import Path
 import chromadb
 from rank_bm25 import BM25Okapi
@@ -30,10 +31,17 @@ _bm25_index: BM25Okapi | None = None
 
 
 def tokenize(text: str) -> list[str]:
-    """Tách từ: Viết thường, loại bỏ dấu câu và split theo khoảng trắng."""
+    """Normalize Vietnamese Unicode/diacritics before BM25 tokenization."""
     if not text:
         return []
-    cleaned = re.sub(r"[^\w\s]", " ", text.lower())
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    normalized = normalized.replace("đ", "d")
+    normalized = "".join(
+        character
+        for character in unicodedata.normalize("NFD", normalized)
+        if not unicodedata.combining(character)
+    )
+    cleaned = re.sub(r"[^\w\s]", " ", normalized)
     return cleaned.split()
 
 

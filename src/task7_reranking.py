@@ -163,9 +163,18 @@ def rerank_rrf(
     content_map: dict[str, dict] = {}  # content -> full dict (item gốc)
 
     for ranked_list in ranked_lists:
-        for rank, item in enumerate(ranked_list, 1):
+        seen_in_ranker: set[str] = set()
+        unique_rank = 0
+        for item in ranked_list:
             key = item["content"]
-            rrf_scores[key] = rrf_scores.get(key, 0) + 1 / (k + rank)
+            # A retriever must contribute at most one rank for a document.
+            # Web/Markdown extraction can produce duplicate chunks, which
+            # otherwise artificially inflates the RRF score.
+            if key in seen_in_ranker:
+                continue
+            seen_in_ranker.add(key)
+            unique_rank += 1
+            rrf_scores[key] = rrf_scores.get(key, 0) + 1 / (k + unique_rank)
             content_map[key] = item
 
     # Sort by RRF score

@@ -136,6 +136,9 @@ def generate_with_citation(
     chunks: list[dict] | None = None,
     answer_generator: Callable[[str, str], str] | None = None,
     use_pageindex: bool = True,
+    use_dense: bool = True,
+    use_bm25: bool = True,
+    use_reranking: bool = True,
 ) -> dict:
     """
     End-to-end RAG generation có citation.
@@ -155,12 +158,15 @@ def generate_with_citation(
         answer_generator: Hàm mock nhận (system_prompt, user_message) và trả answer.
             Nếu None, gọi LLM thật qua OpenAI/OpenRouter.
         use_pageindex: Có cho phép Task 9 gọi PageIndex fallback hay không
+        use_dense: Có chạy semantic/vector search hay không
+        use_bm25: Có chạy lexical/BM25 search hay không
+        use_reranking: Có áp dụng RRF/reranking hay không
 
     Returns:
         {
             'answer': str,           # Câu trả lời có citation
             'sources': list[dict],   # Các chunks đã dùng
-            'retrieval_source': str  # 'hybrid' hoặc 'pageindex'
+            'retrieval_source': str  # hybrid, dense, bm25, hoặc pageindex
         }
     """
     query = query.strip()
@@ -170,7 +176,14 @@ def generate_with_citation(
     retrieved_chunks = (
         list(chunks)
         if chunks is not None
-        else retrieve(query, top_k=top_k, use_pageindex=use_pageindex)
+        else retrieve(
+            query,
+            top_k=top_k,
+            use_pageindex=use_pageindex,
+            use_dense=use_dense,
+            use_bm25=use_bm25,
+            use_reranking=use_reranking,
+        )
     )
     retrieved_chunks = retrieved_chunks[:top_k]
 

@@ -35,6 +35,10 @@ import hashlib
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 STANDARDIZED_DIR = Path(__file__).parent.parent / "data" / "standardized"
 CHROMA_DIR = Path(__file__).parent.parent / "chroma_db"
 
@@ -43,6 +47,7 @@ CHUNK_OVERLAP = 50
 CHUNKING_METHOD = "semantic"
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_DIM = 1536
+MAX_EMBEDDING_INPUT_CHARS = 8000
 VECTOR_STORE = "chromadb"
 COLLECTION_NAME = "university_services_docs_task4"
 MOCK_MODE = os.getenv("TASK4_MOCK_MODE", "").lower() in {"1", "true", "yes"}
@@ -98,18 +103,35 @@ class _OpenAIEmbeddings:
     def __init__(self) -> None:
         from openai import OpenAI
 
-        self.client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise RuntimeError("Thiếu OPENAI_API_KEY hoặc OPENROUTER_API_KEY.")
+        self.provider = "openai" if os.getenv("OPENAI_API_KEY") else "openrouter"
+        self.model = EMBEDDING_MODEL
+        base_url = None
+        if self.provider == "openrouter":
+            base_url = "https://openrouter.ai/api/v1"
+            self.model = f"openai/{self.model}"
+        self.client = OpenAI(api_key=api_key, base_url=base_url)
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        # SemanticChunker may pass a very large Markdown table as one
+        # sentence. Keep the API request below its 8,192-token limit. Normal
+        # indexed chunks are <= CHUNK_SIZE and are never truncated here.
+        safe_texts = [text[:MAX_EMBEDDING_INPUT_CHARS] for text in texts]
         response = self.client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=texts,
-            dimensions=EMBEDDING_DIM,
+            model=self.model,
+            input=safe_texts,
         )
         ordered = sorted(response.data, key=lambda item: item.index)
-        return [item.embedding for item in ordered]
+        vectors = [item.embedding for item in ordered]
+        if any(len(vector) != EMBEDDING_DIM for vector in vectors):
+            raise ValueError(
+                f"Embedding model trả về số chiều khác {EMBEDDING_DIM}."
+            )
+        return vectors
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_documents([text])[0]
@@ -119,14 +141,23 @@ _EMBEDDING_INSTANCE = None
 
 
 def get_embedding_model():
-    """Return OpenAI embeddings, or the isolated mock when no key is present."""
+    """Return one shared embedding backend for indexing and query search."""
     global _EMBEDDING_INSTANCE
     if _EMBEDDING_INSTANCE is None:
-        if MOCK_MODE or not os.getenv("OPENAI_API_KEY"):
+        if MOCK_MODE or not (
+            os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+        ):
             _EMBEDDING_INSTANCE = _MockEmbeddings()
         else:
             _EMBEDDING_INSTANCE = _OpenAIEmbeddings()
     return _EMBEDDING_INSTANCE
+
+
+def embedding_backend_name() -> str:
+    """Return a stable backend label stored with the vector collection."""
+    if MOCK_MODE or not (os.getenv("OPENAI_API_KEY") or os.getenv("OPENROUTER_API_KEY")):
+        return "mock"
+    return "openai" if os.getenv("OPENAI_API_KEY") else "openrouter"
 
 
 def chunk_documents(documents: list[dict]) -> list[dict]:
@@ -199,7 +230,12 @@ def get_collection():
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
     return client.get_or_create_collection(
         name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine", "embedding_model": EMBEDDING_MODEL},
+        metadata={
+            "hnsw:space": "cosine",
+            "embedding_model": EMBEDDING_MODEL,
+            "embedding_backend": embedding_backend_name(),
+            "embedding_dim": EMBEDDING_DIM,
+        },
     )
 
 

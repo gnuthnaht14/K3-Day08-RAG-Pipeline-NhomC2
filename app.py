@@ -311,6 +311,9 @@ def _run_pipeline(
     top_k: int,
     offline_mode: bool,
     use_pageindex: bool,
+    use_dense: bool,
+    use_bm25: bool,
+    use_reranking: bool,
 ) -> dict:
     if offline_mode:
         return _offline_demo_response(query, top_k)
@@ -321,6 +324,9 @@ def _run_pipeline(
         query,
         top_k=top_k,
         use_pageindex=use_pageindex,
+        use_dense=use_dense,
+        use_bm25=use_bm25,
+        use_reranking=use_reranking,
     )
 
 
@@ -349,13 +355,31 @@ def _render_sources(sources: list[dict]) -> None:
                 score = f"{float(source.get('score', 0)):.4f}"
             except (TypeError, ValueError):
                 score = "n/a"
+            score_labels = {
+                "rrf": "RRF",
+                "cosine": "cosine",
+                "bm25": "BM25",
+                "pageindex": "PageIndex",
+                "native": "native",
+            }
+            score_type = str(source.get("score_type", route))
+            score_detail = (
+                f"{score_labels.get(score_type, score_type)} {score}"
+            )
+            component_scores = source.get("component_scores") or {}
+            component_ranks = source.get("component_ranks") or {}
+            if component_scores:
+                score_detail += " · " + " · ".join(
+                    f"{name} {float(value):.4f} (r{component_ranks.get(name, '?')})"
+                    for name, value in component_scores.items()
+                )
 
             with st.container(border=True):
                 st.markdown(
                     f"<div class='source-title'>{index}. {html.escape(name)}</div>"
                     f"<div class='source-meta'>{html.escape(str(doc_type))} · "
                     f"{html.escape(str(year))} · {html.escape(str(route))} · "
-                    f"score {score}</div>",
+                    f"{html.escape(score_detail)}</div>",
                     unsafe_allow_html=True,
                 )
                 content = str(source.get("content") or "").strip()
@@ -395,10 +419,31 @@ with st.sidebar:
         value=default_offline,
         help="Dùng tìm kiếm trích đoạn cục bộ, không gọi vector DB hoặc LLM.",
     )
+    dense_toggle = st.toggle(
+        "Semantic search",
+        value=True,
+        disabled=offline_mode or not health["has_index"],
+        help="Tìm kiếm theo độ tương đồng ngữ nghĩa trên ChromaDB.",
+    )
+    use_dense = dense_toggle and health["has_index"] and not offline_mode
+    bm25_toggle = st.toggle(
+        "BM25 / tìm kiếm thuần văn bản",
+        value=True,
+        disabled=offline_mode,
+        help="Tìm kiếm theo từ khóa. Tắt Semantic và RRF để chạy baseline thuần văn bản.",
+    )
+    use_bm25 = bm25_toggle and not offline_mode
+    reranking_toggle = st.toggle(
+        "RRF / reranking",
+        value=True,
+        disabled=offline_mode or not (use_dense and use_bm25),
+        help="Kết hợp thứ hạng semantic và BM25 bằng Reciprocal Rank Fusion.",
+    )
+    use_reranking = reranking_toggle and use_dense and use_bm25
     use_pageindex = st.toggle(
         "Cho phép PageIndex fallback",
         value=False,
-        disabled=offline_mode or not health["has_pageindex"],
+        disabled=offline_mode or not health["has_pageindex"] or not use_dense,
         help=(
             "Mỗi retrieval có thể tiêu tốn PageIndex credit. Chỉ bật khi "
             "muốn demo fallback."
@@ -427,8 +472,15 @@ with st.sidebar:
     )
 
     st.markdown("### Pipeline")
+    active_searches = []
+    if use_dense:
+        active_searches.append("Semantic")
+    if use_bm25:
+        active_searches.append("BM25")
+    search_label = " + ".join(active_searches) or "Không có search"
+    fusion_label = "RRF" if use_reranking and use_dense and use_bm25 else "Không rerank"
     st.markdown(
-        "<div class='pipeline'>Query<br>↳ Semantic + BM25<br>↳ RRF fusion"
+        f"<div class='pipeline'>Query<br>↳ {search_label}<br>↳ {fusion_label}"
         "<br>↳ PageIndex fallback<br>↳ LLM + citations</div>",
         unsafe_allow_html=True,
     )
@@ -526,12 +578,23 @@ if query:
         started_at = time.perf_counter()
         try:
             with st.status("Đang truy xuất và kiểm chứng nguồn…", expanded=True) as status:
-                st.write("Tìm kiếm semantic và BM25")
+                enabled_searches = []
+                if use_dense:
+                    enabled_searches.append("semantic")
+                if use_bm25:
+                    enabled_searches.append("BM25")
+                st.write(
+                    "Tìm kiếm: " + (" + ".join(enabled_searches) or "không có")
+                    + (" → RRF" if use_reranking and len(enabled_searches) > 1 else "")
+                )
                 response = _run_pipeline(
                     effective_query,
                     top_k,
                     offline_mode,
                     use_pageindex,
+                    use_dense,
+                    use_bm25,
+                    use_reranking,
                 )
                 st.write("Sắp xếp lại context và kiểm tra citation")
                 status.update(label="Đã hoàn tất", state="complete", expanded=False)
