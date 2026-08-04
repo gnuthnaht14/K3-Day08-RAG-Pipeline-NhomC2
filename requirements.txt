@@ -4,7 +4,10 @@ requests>=2.31.0
 numpy>=1.24.0
 
 # Task 2 - Crawling
-crawl4ai>=0.3.0
+# Keep the lab-era Crawl4AI API and avoid dependency backtracking to newer
+# LiteLLM releases that require OpenAI SDK 2.x / platform-specific Rust builds.
+crawl4ai==0.3.746
+litellm==1.53.9
 
 # Task 3 - Document conversion
 markitdown[pdf]>=0.1.0
@@ -12,7 +15,8 @@ fpdf2>=2.7.0
 
 # Task 4 - Chunking & Indexing
 langchain-text-splitters>=0.2.0
-sentence-transformers>=2.2.0
+# Task 4 uses SemanticChunker + OpenAI embeddings, not sentence-transformers.
+langchain-experimental==0.0.65
 chromadb>=0.5.0
 
 # Task 6 - BM25 + TF-IDF
@@ -28,10 +32,10 @@ openai>=1.30.0
 # Group project - UI
 streamlit>=1.35.0
 
-# Group project - Evaluation
-ragas==0.1.21
-datasets>=2.14.0
-langchain-openai>=0.1.0
+# # Group project - Evaluation
+# ragas==0.1.21
+# datasets>=2.14.0
+# langchain-openai>=0.1.0
 
 # Testing (dung de cham diem bai ca nhan)
 pytest>=7.0.0

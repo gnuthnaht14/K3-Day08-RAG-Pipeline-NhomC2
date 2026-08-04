@@ -14,6 +14,9 @@ Base URL: "https://openrouter.ai/api/v1", dùng chung interface với OpenAI SDK
 """
 
 import os
+import re
+from collections.abc import Callable
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -39,6 +42,8 @@ TEMPERATURE = 0.3
 
 # TODO: Chọn LLM model (OpenRouter model ID)
 LLM_MODEL = "openai/gpt-4o-mini"  # hoặc model ":free" nếu chưa có credit
+
+INSUFFICIENT_EVIDENCE_MESSAGE = "I cannot verify this information"
 
 
 # =============================================================================
@@ -77,15 +82,12 @@ def reorder_for_llm(chunks: list[dict]) -> list[dict]:
     Returns:
         List reordered để maximize LLM attention.
     """
-    # TODO: Implement reordering
-    #
-    # if len(chunks) <= 2:
-    #     return chunks
-    #
-    # front = chunks[::2]   # index 0, 2, 4 -> đặt ở đầu
-    # back = chunks[1::2]   # index 1, 3    -> đặt ở cuối (reversed)
-    # return front + back[::-1]
-    raise NotImplementedError("Implement reorder_for_llm")
+    if len(chunks) <= 2:
+        return list(chunks)
+
+    front = chunks[::2]
+    back = chunks[1::2]
+    return front + back[::-1]
 
 
 # =============================================================================
@@ -103,25 +105,38 @@ def format_context(chunks: list[dict]) -> str:
     Returns:
         Formatted context string.
     """
-    # TODO: Implement context formatting
-    #
-    # context_parts = []
-    # for i, chunk in enumerate(chunks, 1):
-    #     source = chunk.get("metadata", {}).get("source", f"Source {i}")
-    #     doc_type = chunk.get("metadata", {}).get("type", "unknown")
-    #     context_parts.append(
-    #         f"[Document {i} | Source: {source} | Type: {doc_type}]\n"
-    #         f"{chunk['content']}\n"
-    #     )
-    # return "\n---\n".join(context_parts)
-    raise NotImplementedError("Implement format_context")
+    context_parts = []
+    for index, chunk in enumerate(chunks, 1):
+        metadata = chunk.get("metadata") or {}
+        source = str(metadata.get("source") or f"Source {index}")
+        year = str(metadata.get("year") or metadata.get("date") or "n.d.")
+        doc_type = str(metadata.get("type") or "unknown")
+        content = str(chunk.get("content") or "").strip()
+
+        if not content:
+            continue
+
+        context_parts.append(
+            f"[Document {index} | Source: {source} | Year: {year} | "
+            f"Type: {doc_type} | Citation: [{source}, {year}]]\n"
+            f"{content}"
+        )
+
+    return "\n\n---\n\n".join(context_parts)
 
 
 # =============================================================================
 # GENERATION
 # =============================================================================
 
-def generate_with_citation(query: str, top_k: int = TOP_K) -> dict:
+def generate_with_citation(
+    query: str,
+    top_k: int = TOP_K,
+    *,
+    chunks: list[dict] | None = None,
+    answer_generator: Callable[[str, str], str] | None = None,
+    use_pageindex: bool = True,
+) -> dict:
     """
     End-to-end RAG generation có citation.
 
@@ -135,6 +150,11 @@ def generate_with_citation(query: str, top_k: int = TOP_K) -> dict:
 
     Args:
         query: Câu hỏi của user
+        top_k: Số chunks tối đa đưa vào context
+        chunks: Mock/pre-retrieved chunks. Nếu None, gọi retrieve() của Task 9
+        answer_generator: Hàm mock nhận (system_prompt, user_message) và trả answer.
+            Nếu None, gọi LLM thật qua OpenAI/OpenRouter.
+        use_pageindex: Có cho phép Task 9 gọi PageIndex fallback hay không
 
     Returns:
         {
@@ -143,57 +163,147 @@ def generate_with_citation(query: str, top_k: int = TOP_K) -> dict:
             'retrieval_source': str  # 'hybrid' hoặc 'pageindex'
         }
     """
-    # TODO: Implement generation pipeline
-    #
-    # # Step 1: Retrieve
-    # chunks = retrieve(query, top_k=top_k)
-    #
-    # # Step 2: Reorder
-    # reordered = reorder_for_llm(chunks)
-    #
-    # # Step 3: Format context
-    # context = format_context(reordered)
-    #
-    # # Step 4: Build prompt
-    # user_message = f"""Context:\n{context}\n\n---\n\nQuestion: {query}"""
-    #
-    # # Step 5: Call LLM (OpenRouter — OpenAI-compatible API)
-    # from openai import OpenAI
-    # api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-    # client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
-    #
-    # response = client.chat.completions.create(
-    #     model=LLM_MODEL,
-    #     messages=[
-    #         {"role": "system", "content": SYSTEM_PROMPT},
-    #         {"role": "user", "content": user_message}
-    #     ],
-    #     temperature=TEMPERATURE,
-    #     top_p=TOP_P,
-    # )
-    #
-    # answer = response.choices[0].message.content
-    #
-    # # Step 6: Return
-    # return {
-    #     "answer": answer,
-    #     "sources": chunks,
-    #     "retrieval_source": chunks[0].get("source", "hybrid") if chunks else "none"
-    # }
-    raise NotImplementedError("Implement generate_with_citation")
+    query = query.strip()
+    if not query or top_k <= 0:
+        return _generation_result(INSUFFICIENT_EVIDENCE_MESSAGE, [])
+
+    retrieved_chunks = (
+        list(chunks)
+        if chunks is not None
+        else retrieve(query, top_k=top_k, use_pageindex=use_pageindex)
+    )
+    retrieved_chunks = retrieved_chunks[:top_k]
+
+    # Empty chunks, or chunks with no usable text, are insufficient evidence.
+    usable_chunks = [
+        chunk
+        for chunk in retrieved_chunks
+        if str(chunk.get("content") or "").strip()
+    ]
+    if not usable_chunks:
+        return _generation_result(INSUFFICIENT_EVIDENCE_MESSAGE, [])
+
+    reordered = reorder_for_llm(usable_chunks)
+    context = format_context(reordered)
+    user_message = (
+        "<context>\n"
+        f"{context}\n"
+        "</context>\n\n"
+        f"Question: {query}\n\n"
+        "Answer only from the context and cite claims using the supplied "
+        "[Source, Year] citation labels."
+    )
+
+    if answer_generator is not None:
+        answer = answer_generator(SYSTEM_PROMPT, user_message)
+    else:
+        answer = _call_llm(SYSTEM_PROMPT, user_message)
+
+    answer = str(answer or "").strip()
+    if not answer or not _contains_citation(answer):
+        answer = INSUFFICIENT_EVIDENCE_MESSAGE
+
+    return _generation_result(answer, usable_chunks)
+
+
+def _call_llm(system_prompt: str, user_message: str) -> str:
+    """Call OpenRouter or OpenAI; imported lazily so mock tests need no SDK."""
+    from openai import OpenAI
+
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    openai_key = os.getenv("OPENAI_API_KEY")
+
+    if openrouter_key:
+        client = OpenAI(
+            api_key=openrouter_key,
+            base_url="https://openrouter.ai/api/v1",
+        )
+        model = os.getenv("LLM_MODEL", LLM_MODEL)
+    elif openai_key:
+        client = OpenAI(api_key=openai_key)
+        configured_model = os.getenv("LLM_MODEL", "gpt-4o-mini")
+        model = configured_model.removeprefix("openai/")
+    else:
+        raise RuntimeError(
+            "Set OPENROUTER_API_KEY or OPENAI_API_KEY, or pass "
+            "answer_generator for an offline mock test."
+        )
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        temperature=TEMPERATURE,
+        top_p=TOP_P,
+    )
+    return response.choices[0].message.content or ""
+
+
+def _contains_citation(answer: str) -> bool:
+    """Accept a non-empty bracket citation containing source and year/date."""
+    return bool(re.search(r"\[[^\[\],]+,\s*[^\[\]]+\]", answer))
+
+
+def _generation_result(answer: str, chunks: list[dict]) -> dict:
+    """Build the stable output schema consumed by app.py and evaluation."""
+    retrieval_source = (
+        str(chunks[0].get("source") or "hybrid") if chunks else "none"
+    )
+    return {
+        "answer": answer,
+        "sources": chunks,
+        "retrieval_source": retrieval_source,
+    }
 
 
 if __name__ == "__main__":
-    test_queries = [
-        "Học phí tại RMIT Vietnam là bao nhiêu?",
-        "Làm sao để đặt phòng học nhóm ở thư viện?",
-        "Sinh viên quốc tế có những học bổng nào?",
+    import sys
+
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
+    # Offline demo: thay chunks và answer_generator bằng Task 9 + LLM thật khi
+    # các module upstream và API key đã sẵn sàng.
+    mock_chunks = [
+        {
+            "content": "Học phí được công bố theo từng chương trình và kỳ học.",
+            "score": 0.91,
+            "metadata": {
+                "source": "RMIT Tuition Fees",
+                "year": 2026,
+                "type": "legal",
+            },
+            "source": "hybrid",
+        },
+        {
+            "content": "Sinh viên cần kiểm tra hóa đơn trước hạn thanh toán.",
+            "score": 0.82,
+            "metadata": {
+                "source": "RMIT Payment Guide",
+                "year": 2026,
+                "type": "guide",
+            },
+            "source": "hybrid",
+        },
     ]
 
-    for q in test_queries:
-        print(f"\n{'='*70}")
-        print(f"Q: {q}")
-        print("=" * 70)
-        result = generate_with_citation(q)
-        print(f"\nA: {result['answer']}")
-        print(f"\n[Sources: {len(result['sources'])} chunks | via {result['retrieval_source']}]")
+    def mock_answer_generator(_system_prompt: str, _user_message: str) -> str:
+        return (
+            "Học phí phụ thuộc vào chương trình và kỳ học; sinh viên nên kiểm "
+            "tra hóa đơn trước hạn thanh toán [RMIT Tuition Fees, 2026]."
+        )
+
+    question = "Học phí và thời hạn thanh toán được xác định như thế nào?"
+    result = generate_with_citation(
+        question,
+        chunks=mock_chunks,
+        answer_generator=mock_answer_generator,
+    )
+    print(f"Q: {question}")
+    print(f"A: {result['answer']}")
+    print(
+        f"[Sources: {len(result['sources'])} chunks | "
+        f"via {result['retrieval_source']}]"
+    )
