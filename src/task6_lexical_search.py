@@ -1,24 +1,41 @@
 """
 Task 6 — Lexical Search Module (BM25).
 
-Mặc định sử dụng BM25. Nếu dùng phương pháp khác (TF-IDF, Elasticsearch,
-Weaviate BM25 built-in), hãy giải thích cơ chế trong buổi demo → +5 bonus.
+CƠ CHẾ VÀ LÝ DO CHỌN BM25 TRONG DỰ ÁN NÀY:
+--------------------------------------------------------------------------------
+1. BM25 vs TF-IDF:
+   - BM25 là bản cải tiến vượt trội của TF-IDF. TF-IDF bị hạn chế khi một từ xuất
+     hiện quá nhiều trong tài liệu dài (điểm số tăng tuyến tính gây méo lệch).
+   - BM25 khắc phục bằng 2 tham số:
+     + Term Saturation (k1=1.5): Điểm số bão hòa dần khi tần suất từ đạt ngưỡng.
+     + Document Length Normalization (b=0.75): Phạt bớt tài liệu quá dài để tránh
+       ưu tiên không hợp lý.
 
-Cài đặt:
-    pip install rank-bm25
+2. BM25 vs Elasticsearch:
+   - Elasticsearch là hệ thống full-text search chuẩn công nghiệp (Production),
+     tuy nhiên rất nặng vì đòi hỏi chạy Server/Docker riêng biệt.
+   - Với quy mô bài lab/dự án nhỏ (vài trăm chunks), rank-bm25 chạy hoàn toàn
+     In-Memory trong Python, không tốn tài nguyên và dễ dàng triển khai.
 
-BM25 hoạt động thế nào:
-    - Term Frequency (TF): từ xuất hiện nhiều trong document → điểm cao
-    - Inverse Document Frequency (IDF): từ hiếm → quan trọng hơn
-    - Document length normalization: document dài không bị ưu tiên quá mức
-    - Formula: score(q,d) = Σ IDF(qi) * (tf(qi,d) * (k1+1)) / (tf(qi,d) + k1*(1-b+b*|d|/avgdl))
-    - k1=1.5 (term saturation), b=0.75 (length normalization)
+3. BM25 vs Weaviate (BM25 Built-in):
+   - Weaviate hỗ trợ sẵn cả Vector & Lexical search trong cùng 1 database. Tuy nhiên,
+     do dự án đã chọn ChromaDB làm Vector Store ở Task 4 & 5, việc tích hợp BM25
+     thuần qua rank-bm25 giúp duy trì tính độc lập, đơn giản và không phải đổi DB.
+
+TỪ KHÓA & TÁCH TỪ (TOKENIZATION):
+   - Sử dụng thư viện `underthesea` (word_tokenize) để tách từ ghép Tiếng Việt
+     (ví dụ: "học phí" -> "học_phí"), giúp khớp từ khóa chính xác theo ngữ nghĩa.
 """
 
 import re
 from pathlib import Path
 import chromadb
 from rank_bm25 import BM25Okapi
+
+try:
+    from underthesea import word_tokenize
+except ImportError:
+    word_tokenize = None
 
 STANDARDIZED_DIR = Path(__file__).parent.parent / "data" / "standardized"
 CHROMA_DIR = Path(__file__).parent.parent / "chroma_db"
@@ -30,10 +47,20 @@ _bm25_index: BM25Okapi | None = None
 
 
 def tokenize(text: str) -> list[str]:
-    """Tách từ: Viết thường, loại bỏ dấu câu và split theo khoảng trắng."""
+    """
+    Tách từ cho BM25:
+    - Sử dụng underthesea để tách từ ghép tiếng Việt (format='text' -> ví dụ: 'học_phí').
+    - Fallback: loại bỏ dấu câu, chuyển chữ thường và split theo khoảng trắng.
+    """
     if not text:
         return []
     cleaned = re.sub(r"[^\w\s]", " ", text.lower())
+    if word_tokenize is not None:
+        try:
+            tokenized_str = word_tokenize(cleaned, format="text")
+            return tokenized_str.split()
+        except Exception:
+            pass
     return cleaned.split()
 
 
@@ -173,4 +200,3 @@ if __name__ == "__main__":
     results = lexical_search("tuition fee payment methods", top_k=5)
     for r in results:
         print(f"[{r['score']:.3f}] {r['content'][:100]}...")
-
